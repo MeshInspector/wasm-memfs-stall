@@ -137,10 +137,9 @@ int main()
         const int fd = ::open( ( dir / "log.txt" ).c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644 );
         if ( fd < 0 )
             return;
-        const char line[] = "[info] a line of about the length the application writes
-";
+        const std::string line = std::string( "[info] a line of about the length the application writes" ) + char( 10 );
         while ( !gStop.load( std::memory_order_acquire ) )
-            ::write( fd, line, sizeof( line ) - 1 );
+            ::write( fd, line.data(), line.size() );
         ::close( fd );
 #else
         std::ofstream log( dir / "log.txt", std::ios::binary | std::ios::app );
