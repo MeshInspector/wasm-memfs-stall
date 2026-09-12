@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdio>
 #include <string>
+#include <vector>
 #include <pthread.h>
 
 #include <thread>
@@ -169,14 +170,51 @@ int main()
             const std::string path = "/f" + std::to_string( i );
             // the same shape of write the stalling reproducer's writer thread does
             const std::string buf = std::string( "[info] a line of about the length an application logs" ) + char( 10 );
+            const std::string dst = "/d" + std::to_string( i );
+            std::vector< char > copyBuf( 16 * 1024 );
+#if MODE == 5
+            // a 100 KB source file, the same size the stalling reproducer copies
+            {
+                const int src = ::open( path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644 );
+                const std::vector< char > block( 100 * 1024, 'x' );
+                ::write( src, block.data(), block.size() );
+                ::close( src );
+            }
+            const int fd = -1;
+            ( void )fd;
+#else
             const int fd = ::open( path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644 );
             if ( fd < 0 )
                 return;
+#endif
             while ( !gStop.load( std::memory_order_acquire ) )
             {
 #if MODE == 0
                 gWaiting.fetch_add( 1, std::memory_order_relaxed );
                 emscripten_proxy_sync( q, mainThread, noop, nullptr );
+                gWaiting.fetch_sub( 1, std::memory_order_relaxed );
+#elif MODE == 5
+                // the whole copier loop of the stalling program, on this worker's own files
+                gWaiting.fetch_add( 1, std::memory_order_relaxed );
+                {
+                    ::unlink( dst.c_str() );
+                    const int in = ::open( path.c_str(), O_RDONLY );
+                    const int out = ::open( dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644 );
+                    if ( in >= 0 && out >= 0 )
+                    {
+                        for ( ;; )
+                        {
+                            const ssize_t n = ::read( in, copyBuf.data(), copyBuf.size() );
+                            if ( n <= 0 )
+                                break;
+                            ::write( out, copyBuf.data(), size_t( n ) );
+                        }
+                    }
+                    if ( in >= 0 )
+                        ::close( in );
+                    if ( out >= 0 )
+                        ::close( out );
+                }
                 gWaiting.fetch_sub( 1, std::memory_order_relaxed );
 #elif MODE == 3
                 // a proxied syscall that succeeds and changes FS state, but moves no data
