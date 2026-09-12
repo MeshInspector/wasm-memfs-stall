@@ -4,6 +4,7 @@
 // requestAnimationFrame loop. Each thread records the call it is about to enter, so a
 // stall reports which one never came back.
 #include <emscripten.h>
+#include <emscripten/proxying.h>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -25,6 +26,7 @@ namespace
 
 constexpr int cSeconds = RUN_SECONDS;
 constexpr int cStallSeconds = 60;
+constexpr int cDrainAfterSeconds = 90;
 constexpr int cFileKiB = 100;
 
 std::atomic<long long> gCopies{ 0 };
@@ -37,6 +39,8 @@ std::chrono::steady_clock::time_point gLastProgress;
 long long gSeen = 0;
 int gExitCountdown = -1;
 bool gStalled = false;
+bool gDrained = false;
+std::chrono::steady_clock::time_point gStallAt;
 long long gStalledFrames = 0;
 
 const char* phaseName( int p )
@@ -66,9 +70,21 @@ void frame()
 {
     if ( gStalled )
     {
+        // every syscall under -pthread is proxied to this thread and the worker waits on a
+        // futex for the reply; if running the queue by hand revives them, only the wakeup was lost
+        if ( !gDrained && secondsSince( gStallAt ) >= cDrainAfterSeconds )
+        {
+            gDrained = true;
+            const long long before = gCopies.load( std::memory_order_relaxed );
+            emscripten_proxy_execute_queue( emscripten_proxy_get_system_queue() );
+            std::printf( "DRAIN: executed the system proxying queue by hand, copies %lld -> %lld",
+                before, gCopies.load( std::memory_order_relaxed ) );
+            std::putchar( 10 );
+            std::fflush( stdout );
+        }
         if ( ++gStalledFrames % 600 == 0 )
         {
-            std::printf( "still stalled, main loop alive" );
+            std::printf( "still stalled, main loop alive, %lld copies%s", gCopies.load( std::memory_order_relaxed ), gDrained ? " (after drain)" : "" );
             std::putchar( 10 );
             std::fflush( stdout );
         }
@@ -92,6 +108,7 @@ void frame()
         // deliberately do NOT exit: the harness now SIGTERMs Firefox so the Gecko profiler
         // dumps every thread's stack while the wedge is still there
         gStalled = true;
+        gStallAt = std::chrono::steady_clock::now();
     }
 
     if ( gExitCountdown > 0 )

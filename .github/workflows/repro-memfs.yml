@@ -10,14 +10,15 @@ env:
   EMSDK_IMAGE: emscripten/emsdk:4.0.19-arm64
 
 jobs:
-  # Kept small: this is the positive control that tells a quiet day apart from a fix.
+  # Kept small: node reproduces this more often than the browser does, so this leg is only
+  # here to confirm the browser behaves the same way.
   repro:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 ]
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8 ]
 
     steps:
       - uses: actions/checkout@v5
@@ -41,6 +42,7 @@ jobs:
           for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
           grep -q hardware_concurrency run.log || { echo "the program never started in 3 min - config is broken"; cat run.log; exit 1; }
           for i in $(seq 1 60); do sleep 10; grep -qE "STALLED|done:" run.log && break; done
+          grep -q STALLED run.log && sleep 200
           kill $EMRUN 2>/dev/null || true
           pkill -KILL -f firefox 2>/dev/null || true
           cat run.log
@@ -86,6 +88,9 @@ jobs:
             wc -l stacks.txt
             grep -c "^Thread" stacks.txt || echo "no threads captured - check stacks.txt"
             head -40 stacks.txt
+            echo "waiting out the drain probe"
+            sleep 200
+            grep -E "^DRAIN|^still stalled" run.log || echo "no drain line - the main loop is dead too"
           else
             echo "no stall this shard"
           fi
