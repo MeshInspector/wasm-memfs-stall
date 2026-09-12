@@ -29,6 +29,15 @@ namespace
 #ifndef SECOND_THREAD_FS
 #define SECOND_THREAD_FS 1
 #endif
+// 1 = write() straight to a fd, no stdio and no FILE lock; 0 = std::ofstream as before
+#ifndef RAW_IO
+#define RAW_IO 0
+#endif
+
+#if RAW_IO
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 constexpr int cSeconds = RUN_SECONDS;
 constexpr int cStallSeconds = 60;
@@ -124,6 +133,16 @@ int main()
                 std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
             return;
         }
+#if RAW_IO
+        const int fd = ::open( ( dir / "log.txt" ).c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644 );
+        if ( fd < 0 )
+            return;
+        const char line[] = "[info] a line of about the length the application writes
+";
+        while ( !gStop.load( std::memory_order_acquire ) )
+            ::write( fd, line, sizeof( line ) - 1 );
+        ::close( fd );
+#else
         std::ofstream log( dir / "log.txt", std::ios::binary | std::ios::app );
         while ( log && !gStop.load( std::memory_order_acquire ) )
         {
@@ -131,6 +150,7 @@ int main()
             log.put( char( 10 ) );
             log.flush();
         }
+#endif
     } ).detach();
 
     std::thread( [src, dir]
