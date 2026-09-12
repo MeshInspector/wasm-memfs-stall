@@ -45,16 +45,21 @@ The pthread pool size is set at run time through the Firefox pref `dom.maxHardwa
 | variant | stalled |
 |---|---|
 | stdio writer + `std::filesystem::copy` | 3/28 |
-| raw `write()` writer + `std::filesystem::copy` | 0/27 |
+| raw `write()` writer + `std::filesystem::copy` | 1/16 |
 | raw everywhere: `open`/`read`/`write`/`unlink` | 2/16 |
 | ballast 0 / 25 / 100 / 600 MB | no difference detectable |
 | pthread pool 2 vs 3 | no difference detectable |
 
 Two threads touching MEMFS and a main thread in a real event loop are the only things
 established. Everything else -- heap size, pool size, `std::filesystem::copy` specifically,
-and stdio's FILE lock -- is refuted or unsupported. In particular the raw-I/O variant takes
-no `FLOCK` anywhere and still stalls, which distinguishes this from
+and stdio's FILE lock -- is refuted or unsupported. All three I/O variants stall, including the one that
+takes no `FLOCK` anywhere, which distinguishes this from
 [emscripten#20059](https://github.com/emscripten-core/emscripten/issues/20059).
+
+A hung shard does not always print `STALLED`: in the severe form the frame callback stops
+too, so the job simply runs until something kills it. **Judge a cell by its duration against
+its cohort**, not by the marker alone -- a 16-minute job among 5-minute ones is a hang
+whatever its conclusion says.
 
 At a per-shard rate near 10%, a 12-sample arm cannot establish that an ingredient is
 required: a clean 12/12 happens by chance about 28% of the time. Read these numbers as rates
