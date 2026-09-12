@@ -12,7 +12,7 @@ env:
 jobs:
   repro:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 25
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
@@ -28,8 +28,10 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DBALLAST_MIB=100 -DIO_MODE=${{ matrix.io_mode }} -DRUN_SECONDS=240 -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 --emrun -o out/repro.html
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" $EMSDK_IMAGE cp /emsdk/upstream/emscripten/emrun.py /out/
 
+      # a stalled shard cannot exit -- force_exit blocks on the wedged thread -- so it
+      # sits here until the step is killed. The marker is already in the log by then.
       - name: Run
-        timeout-minutes: 20
+        timeout-minutes: 8
         working-directory: out
         run: |
           mkdir -p /tmp/ffprof
