@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <string>
 #include <pthread.h>
 
 #include <thread>
@@ -161,14 +162,35 @@ int main()
 
     for ( int i = 0; i < WORKERS; ++i )
     {
-        std::thread( [mainThread]
+        std::thread( [mainThread, i]
         {
             em_proxying_queue* q = emscripten_proxy_get_system_queue();
+            ( void )q;
+            const std::string path = "/f" + std::to_string( i );
+            // the same shape of write the stalling reproducer's writer thread does
+            const std::string buf = std::string( "[info] a line of about the length an application logs" ) + char( 10 );
+            const int fd = ::open( path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644 );
+            if ( fd < 0 )
+                return;
             while ( !gStop.load( std::memory_order_acquire ) )
             {
 #if MODE == 0
                 gWaiting.fetch_add( 1, std::memory_order_relaxed );
                 emscripten_proxy_sync( q, mainThread, noop, nullptr );
+                gWaiting.fetch_sub( 1, std::memory_order_relaxed );
+#elif MODE == 3
+                // a proxied syscall that succeeds and changes FS state, but moves no data
+                gWaiting.fetch_add( 1, std::memory_order_relaxed );
+                {
+                    const int fd = ::open( path.c_str(), O_RDONLY );
+                    if ( fd >= 0 )
+                        ::close( fd );
+                }
+                gWaiting.fetch_sub( 1, std::memory_order_relaxed );
+#elif MODE == 4
+                // a proxied syscall that moves data through the heap and nothing else
+                gWaiting.fetch_add( 1, std::memory_order_relaxed );
+                ::write( fd, buf.data(), buf.size() );
                 gWaiting.fetch_sub( 1, std::memory_order_relaxed );
 #elif MODE == 2
                 gWaiting.fetch_add( 1, std::memory_order_relaxed );

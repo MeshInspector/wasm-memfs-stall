@@ -69,18 +69,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-  # A proxied syscall that reads and writes nothing: open() of a path that does not exist.
-  # MODE 0 (a bare emscripten_proxy_sync no-op) ran 1.7 BILLION calls without stalling, so the
-  # C proxying queue is not enough on its own - this adds the JS layer and the FS lookup.
-  proxy-only:
+  # open() + close() of a real file: FS state changes, no data crosses the heap.
+  # MODE 2 (open of a missing path) ran 1.6 BILLION proxied syscalls clean, so neither the
+  # C queue nor the JS proxying layer is enough by itself.
+  open-close:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-                 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-                 41, 42, 43, 44, 45, 46, 47, 48 ]
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 ]
 
     steps:
       - uses: actions/checkout@v5
@@ -88,7 +86,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread proxy_repro.cpp -DRUN_SECONDS=480 -DMODE=2 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread proxy_repro.cpp -DRUN_SECONDS=480 -DMODE=3 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
 
       - name: Run
         timeout-minutes: 16
@@ -117,14 +115,14 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: proxy-stacks-${{ matrix.shard }}
+          name: openclose-stalled-${{ matrix.shard }}
           path: out/stacks.txt
           if-no-files-found: ignore
           retention-days: 3
 
-  # juj found in emscripten#24570 that -sMALLOC=emmalloc made a proxying-queue deadlock go away,
-  # because dlmalloc's mutex means malloc() itself can end up running the proxy queue re-entrantly.
-  emmalloc:
+  # write() of one short line to an open fd: data crosses the heap, FS state does not change.
+  # This is exactly the writer thread of the stalling reproducer, with no copier alongside it.
+  write-only:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
@@ -135,29 +133,39 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Build with emmalloc
+      - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -s MALLOC=emmalloc -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/repro.js
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread proxy_repro.cpp -DRUN_SECONDS=480 -DMODE=4 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
 
       - name: Run
         timeout-minutes: 16
         working-directory: out
         run: |
-          taskset -c 0,1 node repro.js > run.log 2>&1 &
+          command -v gdb > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gdb; }
+          command -v gdb || { echo "gdb is not available"; exit 1; }
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
+          taskset -c 0,1 node proxy.js > run.log 2>&1 &
           NODE=$!
           for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
           grep -q hardware_concurrency run.log || { echo "never started"; cat run.log; exit 1; }
           for i in $(seq 1 60); do sleep 10; grep -qE "^STALLED|^done:" run.log && break; done
-          grep -q "^STALLED" run.log && touch stalled.txt
+          if grep -q "^STALLED" run.log; then
+            sudo gdb -p $NODE -batch -ex "set pagination off" -ex "thread apply all bt" > stacks.txt 2>&1 || true
+            head -40 stacks.txt
+            sleep 200
+            grep -E "^DRAIN|^still stalled" run.log || echo "no drain line - the main loop is dead too"
+          else
+            echo "no stall this shard"
+          fi
           kill $NODE 2>/dev/null || true
-          tail -3 run.log
+          tail -5 run.log
 
-      - name: Mark a stall
+      - name: Upload stacks
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: emmalloc-stalled-${{ matrix.shard }}
-          path: out/stalled.txt
+          name: writeonly-stalled-${{ matrix.shard }}
+          path: out/stacks.txt
           if-no-files-found: ignore
           retention-days: 3
