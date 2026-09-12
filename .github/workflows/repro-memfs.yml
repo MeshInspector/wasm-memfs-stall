@@ -4,7 +4,6 @@ name: MEMFS stall repro
 # experiment -- edit it, push, and every cell runs in parallel in about ten minutes.
 on:
   push:
-    branches: [ 'repro/**' ]
   workflow_dispatch:
 
 env:
@@ -22,13 +21,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-        with:
-          sparse-checkout: .github/repro
 
       - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread .github/repro/memfs_repro.cpp -DBALLAST_MIB=100 -DRAW_IO=${{ matrix.raw }} -DRUN_SECONDS=240 -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 --emrun -o out/repro.html
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DBALLAST_MIB=100 -DRAW_IO=${{ matrix.raw }} -DRUN_SECONDS=240 -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 --emrun -o out/repro.html
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" $EMSDK_IMAGE cp /emsdk/upstream/emscripten/emrun.py /out/
 
       - name: Run
