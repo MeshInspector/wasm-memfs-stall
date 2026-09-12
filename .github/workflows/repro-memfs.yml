@@ -92,7 +92,10 @@ jobs:
         timeout-minutes: 16
         working-directory: out
         run: |
-          sudo apt-get install -y -qq gdb > /dev/null 2>&1 || echo "gdb install failed"
+          command -v gdb > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gdb; }
+          command -v gdb || { echo "gdb is not available, this job cannot do its one task"; exit 1; }
+          # yama lets only a parent trace its child by default, and gdb here is a sibling of node
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
           taskset -c 0,1 node repro.js > run.log 2>&1 &
           NODE=$!
           for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
@@ -100,8 +103,10 @@ jobs:
           for i in $(seq 1 60); do sleep 10; grep -qE "^STALLED|^done:" run.log && break; done
           if grep -q "^STALLED" run.log; then
             echo "wedged - taking stacks of every thread"
-            gdb -p $NODE -batch -ex "set pagination off" -ex "thread apply all bt" > stacks.txt 2>&1 || true
+            sudo gdb -p $NODE -batch -ex "set pagination off" -ex "thread apply all bt" > stacks.txt 2>&1 || true
             wc -l stacks.txt
+            grep -c "^Thread" stacks.txt || echo "no threads captured - check stacks.txt"
+            head -40 stacks.txt
           else
             echo "no stall this shard"
           fi
