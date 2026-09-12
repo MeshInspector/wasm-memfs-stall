@@ -17,6 +17,16 @@
 #include <thread>
 #include <vector>
 
+// WITH_WRITER / WITH_COPIER let either thread be left out, to ask whether the hang
+// needs both of them or only one.
+#ifndef WITH_WRITER
+#define WITH_WRITER 1
+#endif
+
+#ifndef WITH_COPIER
+#define WITH_COPIER 1
+#endif
+
 #ifndef RUN_SECONDS
 #define RUN_SECONDS 240
 #endif
@@ -133,7 +143,8 @@ void frame()
 
 int main()
 {
-    std::printf( "hardware_concurrency %u", std::thread::hardware_concurrency() );
+    std::printf( "hardware_concurrency %u, writer %d, copier %d",
+        std::thread::hardware_concurrency(), int( WITH_WRITER ), int( WITH_COPIER ) );
     std::putchar( 10 );
     std::fflush( stdout );
 
@@ -150,6 +161,7 @@ int main()
         ::close( fd );
     }
 
+#if WITH_WRITER
     std::thread( [dir]
     {
         const int fd = ::open( ( dir / "log.txt" ).c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644 );
@@ -161,10 +173,16 @@ int main()
             gWritePhase.store( 5, std::memory_order_relaxed );
             ::write( fd, line.data(), line.size() );
             gWritePhase.store( 7, std::memory_order_relaxed );
+#if !WITH_COPIER
+            gCopies.fetch_add( 1, std::memory_order_relaxed );
+#endif
         }
         ::close( fd );
     } ).detach();
 
+#endif
+
+#if WITH_COPIER
     std::thread( [src, dir]
     {
         const auto dst = dir / "dst.bin";
@@ -199,6 +217,8 @@ int main()
             gCopies.fetch_add( 1, std::memory_order_relaxed );
         }
     } ).detach();
+
+#endif
 
     gStart = gLastProgress = std::chrono::steady_clock::now();
 

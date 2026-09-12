@@ -69,10 +69,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-  # Two workers each running the WHOLE copier loop - unlink, open, open, read, write,
-  # close, close - on their own files. open+close alone and write alone were both clean
-  # over ~600M proxied syscalls each, so this asks whether the copier loop is the party.
-  copy-two:
+  # The stalling program with the writer thread removed: the copier alone.
+  copier-alone:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
@@ -86,7 +84,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread proxy_repro.cpp -DRUN_SECONDS=480 -DMODE=5 -DWORKERS=2 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -DWITH_WRITER=0 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
 
       - name: Run
         timeout-minutes: 16
@@ -115,14 +113,15 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: copy-two-stalled-${{ matrix.shard }}
+          name: copier-alone-stalled-${{ matrix.shard }}
           path: out/stacks.txt
           if-no-files-found: ignore
           retention-days: 3
 
-  # The same copier loop with a SINGLE worker. If this stalls, the second thread was never
-  # needed and the reproducer shrinks to one thread plus a main loop.
-  copy-one:
+  # The stalling program with the copier removed: the writer alone. Reconstructions of
+  # each thread in isolation were clean over hundreds of millions of syscalls, so these
+  # two ablate the real code instead of approximating it.
+  writer-alone:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
@@ -136,7 +135,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread proxy_repro.cpp -DRUN_SECONDS=480 -DMODE=5 -DWORKERS=1 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -DWITH_COPIER=0 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
 
       - name: Run
         timeout-minutes: 16
@@ -165,7 +164,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: copy-one-stalled-${{ matrix.shard }}
+          name: writer-alone-stalled-${{ matrix.shard }}
           path: out/stacks.txt
           if-no-files-found: ignore
           retention-days: 3
