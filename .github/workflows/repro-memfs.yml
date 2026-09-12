@@ -10,15 +10,14 @@ env:
   EMSDK_IMAGE: emscripten/emsdk:4.0.19-arm64
 
 jobs:
+  # Kept small: this is the positive control that tells a quiet day apart from a fix.
   repro:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-                 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-                 41, 42, 43, 44, 45, 46, 47, 48 ]
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 ]
 
     steps:
       - uses: actions/checkout@v5
@@ -34,12 +33,6 @@ jobs:
       - name: Run
         timeout-minutes: 12
         working-directory: out
-        env:
-          MOZ_PROFILER_STARTUP: 1
-          MOZ_PROFILER_STARTUP_INTERVAL: 10
-          MOZ_PROFILER_STARTUP_FEATURES: js,stackwalk
-          MOZ_PROFILER_STARTUP_FILTERS: GeckoMain,DOM Worker
-          MOZ_PROFILER_SHUTDOWN: /tmp/profile.json
         run: |
           mkdir -p /tmp/ffprof
           echo 'user_pref("dom.maxHardwareConcurrency", 2);' > /tmp/ffprof/user.js
@@ -48,37 +41,23 @@ jobs:
           for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
           grep -q hardware_concurrency run.log || { echo "the program never started in 3 min - config is broken"; cat run.log; exit 1; }
           for i in $(seq 1 60); do sleep 10; grep -qE "STALLED|done:" run.log && break; done
-          if grep -q STALLED run.log; then
-            echo "stall seen, asking the parent Firefox to shut down so the profiler dumps"
-            ps -eo pid,etime,comm | grep -i firefox || true
-            pkill -TERM -o -f "/usr/bin/firefox" || true
-            for i in $(seq 1 12); do sleep 5; [ -s /tmp/profile.json ] && break; done
-            ls -la /tmp/profile.json 2>/dev/null || find /tmp /home/runner -maxdepth 3 -name "profile*.json" -newermt "-10 minutes" 2>/dev/null | head
-          fi
           kill $EMRUN 2>/dev/null || true
           pkill -KILL -f firefox 2>/dev/null || true
           cat run.log
-          if [ -s /tmp/profile.json ]; then gzip -f -c /tmp/profile.json > profile.json.gz; ls -la profile.json.gz; else echo "no profile written"; fi
 
-      - name: Upload profile
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: profile-${{ matrix.shard }}
-          path: out/profile.json.gz
-          if-no-files-found: ignore
-          retention-days: 3
-
-  # The browser profiler only writes its dump during a clean shutdown, which a wedged page
-  # prevents. node gives the main thread a real event loop too, and a stuck process can be
-  # inspected from outside with gdb, which needs no cooperation from the process at all.
+  # node gives the main thread a real event loop too, and a stuck process can be inspected
+  # from outside with gdb, which needs no cooperation from the process at all. 48 shards at
+  # ~2750 copies/s is ~63M copies: if the browser rate held here we would expect ~8 stalls,
+  # so an empty run is itself the answer.
   node-stacks:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ]
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+                 41, 42, 43, 44, 45, 46, 47, 48 ]
 
     steps:
       - uses: actions/checkout@v5
