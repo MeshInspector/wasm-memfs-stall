@@ -69,8 +69,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-  # The stalling program with the writer thread removed: the copier alone.
-  copier-alone:
+  # The unmodified program on the CURRENT emsdk (6.0.9); everything else here is 4.0.19,
+  # which is what MeshInspector ships. The first question upstream will ask.
+  latest-emsdk:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     strategy:
@@ -84,7 +85,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -DWITH_WRITER=0 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src emscripten/emsdk:6.0.9-arm64 em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
 
       - name: Run
         timeout-minutes: 16
@@ -113,58 +114,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          name: copier-alone-stalled-${{ matrix.shard }}
-          path: out/stacks.txt
-          if-no-files-found: ignore
-          retention-days: 3
-
-  # The stalling program with the copier removed: the writer alone. Reconstructions of
-  # each thread in isolation were clean over hundreds of millions of syscalls, so these
-  # two ablate the real code instead of approximating it.
-  writer-alone:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 ]
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Build
-        run: |
-          mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -DWITH_COPIER=0 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
-
-      - name: Run
-        timeout-minutes: 16
-        working-directory: out
-        run: |
-          command -v gdb > /dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq gdb; }
-          command -v gdb || { echo "gdb is not available"; exit 1; }
-          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
-          taskset -c 0,1 node proxy.js > run.log 2>&1 &
-          NODE=$!
-          for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
-          grep -q hardware_concurrency run.log || { echo "never started"; cat run.log; exit 1; }
-          for i in $(seq 1 60); do sleep 10; grep -qE "^STALLED|^done:" run.log && break; done
-          if grep -q "^STALLED" run.log; then
-            sudo gdb -p $NODE -batch -ex "set pagination off" -ex "thread apply all bt" > stacks.txt 2>&1 || true
-            head -40 stacks.txt
-            sleep 200
-            grep -E "^DRAIN|^still stalled" run.log || echo "no drain line - the main loop is dead too"
-          else
-            echo "no stall this shard"
-          fi
-          kill $NODE 2>/dev/null || true
-          tail -5 run.log
-
-      - name: Upload stacks
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: writer-alone-stalled-${{ matrix.shard }}
+          name: latest-stalled-${{ matrix.shard }}
           path: out/stacks.txt
           if-no-files-found: ignore
           retention-days: 3
