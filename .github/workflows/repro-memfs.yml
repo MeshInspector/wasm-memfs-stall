@@ -12,41 +12,6 @@ env:
 jobs:
   # Kept small: node reproduces this more often than the browser does, so this leg is only
   # here to confirm the browser behaves the same way.
-  repro:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [ 1, 2, 3, 4, 5, 6, 7, 8 ]
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Build
-        run: |
-          mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 --emrun -o out/repro.html
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" $EMSDK_IMAGE cp /emsdk/upstream/emscripten/emrun.py /out/
-
-      # a stalled shard cannot exit -- force_exit blocks on the wedged thread -- so it
-      # sits here until the step is killed. The marker is already in the log by then.
-      - name: Run
-        timeout-minutes: 12
-        working-directory: out
-        run: |
-          mkdir -p /tmp/ffprof
-          echo 'user_pref("dom.maxHardwareConcurrency", 2);' > /tmp/ffprof/user.js
-          taskset -c 0,1 python3 emrun.py --browser=/usr/bin/firefox --browser-args="--headless --profile /tmp/ffprof" --kill-start ./repro.html > run.log 2>&1 &
-          EMRUN=$!
-          for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
-          grep -q hardware_concurrency run.log || { echo "the program never started in 3 min - config is broken"; cat run.log; exit 1; }
-          for i in $(seq 1 60); do sleep 10; grep -qE "STALLED|done:" run.log && break; done
-          grep -q STALLED run.log && sleep 200
-          kill $EMRUN 2>/dev/null || true
-          pkill -KILL -f firefox 2>/dev/null || true
-          cat run.log
-
   # node gives the main thread a real event loop too, and a stuck process can be inspected
   # from outside with gdb, which needs no cooperation from the process at all. 48 shards at
   # ~2750 copies/s is ~63M copies: if the browser rate held here we would expect ~8 stalls,
@@ -104,8 +69,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
-  # No filesystem at all: the workers proxy a no-op through the same system queue the
-  # syscalls use. If this stops too, MEMFS was never the subject.
+  # A proxied syscall that reads and writes nothing: open() of a path that does not exist.
+  # MODE 0 (a bare emscripten_proxy_sync no-op) ran 1.7 BILLION calls without stalling, so the
+  # C proxying queue is not enough on its own - this adds the JS layer and the FS lookup.
   proxy-only:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
@@ -122,7 +88,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread proxy_repro.cpp -DRUN_SECONDS=480 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread proxy_repro.cpp -DRUN_SECONDS=480 -DMODE=2 -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/proxy.js
 
       - name: Run
         timeout-minutes: 16
@@ -153,5 +119,45 @@ jobs:
         with:
           name: proxy-stacks-${{ matrix.shard }}
           path: out/stacks.txt
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # juj found in emscripten#24570 that -sMALLOC=emmalloc made a proxying-queue deadlock go away,
+  # because dlmalloc's mutex means malloc() itself can end up running the proxy queue re-entrantly.
+  emmalloc:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 ]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build with emmalloc
+        run: |
+          mkdir -p out
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DRUN_SECONDS=480 -s MALLOC=emmalloc -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o out/repro.js
+
+      - name: Run
+        timeout-minutes: 16
+        working-directory: out
+        run: |
+          taskset -c 0,1 node repro.js > run.log 2>&1 &
+          NODE=$!
+          for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
+          grep -q hardware_concurrency run.log || { echo "never started"; cat run.log; exit 1; }
+          for i in $(seq 1 60); do sleep 10; grep -qE "^STALLED|^done:" run.log && break; done
+          grep -q "^STALLED" run.log && touch stalled.txt
+          kill $NODE 2>/dev/null || true
+          tail -3 run.log
+
+      - name: Mark a stall
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: emmalloc-stalled-${{ matrix.shard }}
+          path: out/stalled.txt
           if-no-files-found: ignore
           retention-days: 3

@@ -8,13 +8,26 @@
 #include <emscripten/proxying.h>
 #include <emscripten/threading.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <pthread.h>
+
 #include <thread>
 
 #ifndef RUN_SECONDS
 #define RUN_SECONDS 240
+#endif
+
+// MODE 0: emscripten_proxy_sync. MODE 2: a proxied SYSCALL that touches no file data
+// (open of a path that does not exist), which adds the JS proxying layer and the FS
+// lookup on the other end. MODE 1: emscripten_proxy_async plus our own
+// mutex/condvar, which splits "the task never ran" from "it ran and the wake was lost".
+#ifndef MODE
+#define MODE 0
 #endif
 
 #ifndef WORKERS
@@ -47,6 +60,28 @@ void noop( void* )
 {
     gRan.fetch_add( 1, std::memory_order_relaxed );
 }
+
+#if MODE == 1
+
+struct Slot
+{
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+    bool done = false;
+};
+
+// runs on the main thread
+void finish( void* p )
+{
+    Slot& s = *static_cast< Slot* >( p );
+    gRan.fetch_add( 1, std::memory_order_relaxed );
+    pthread_mutex_lock( &s.mutex );
+    s.done = true;
+    pthread_cond_signal( &s.cond );
+    pthread_mutex_unlock( &s.mutex );
+}
+
+#endif
 
 int secondsSince( std::chrono::steady_clock::time_point t )
 {
@@ -117,8 +152,8 @@ void frame()
 
 int main()
 {
-    std::printf( "hardware_concurrency %u, workers %d",
-        std::thread::hardware_concurrency(), int( WORKERS ) );
+    std::printf( "hardware_concurrency %u, workers %d, mode %d",
+        std::thread::hardware_concurrency(), int( WORKERS ), int( MODE ) );
     std::putchar( 10 );
     std::fflush( stdout );
 
@@ -131,9 +166,27 @@ int main()
             em_proxying_queue* q = emscripten_proxy_get_system_queue();
             while ( !gStop.load( std::memory_order_acquire ) )
             {
+#if MODE == 0
                 gWaiting.fetch_add( 1, std::memory_order_relaxed );
                 emscripten_proxy_sync( q, mainThread, noop, nullptr );
                 gWaiting.fetch_sub( 1, std::memory_order_relaxed );
+#elif MODE == 2
+                gWaiting.fetch_add( 1, std::memory_order_relaxed );
+                const int fd = ::open( "/no/such/file", O_RDONLY );
+                if ( fd >= 0 )
+                    ::close( fd );
+                gWaiting.fetch_sub( 1, std::memory_order_relaxed );
+#else
+                Slot slot;
+                gWaiting.fetch_add( 1, std::memory_order_relaxed );
+                if ( !emscripten_proxy_async( q, mainThread, finish, &slot ) )
+                    break;
+                pthread_mutex_lock( &slot.mutex );
+                while ( !slot.done )
+                    pthread_cond_wait( &slot.cond, &slot.mutex );
+                pthread_mutex_unlock( &slot.mutex );
+                gWaiting.fetch_sub( 1, std::memory_order_relaxed );
+#endif
                 gCalls.fetch_add( 1, std::memory_order_relaxed );
             }
         } ).detach();
