@@ -1,0 +1,38 @@
+name: MEMFS stall repro
+
+# Standalone: no MeshLib build, no MRTest, no Playwright. The matrix below is the
+# experiment -- edit it, push, and every cell runs in parallel in about ten minutes.
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  EMSDK_IMAGE: emscripten/emsdk:4.0.19-arm64
+
+jobs:
+  repro:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        ballast: [ 0, 100 ]
+        pool: [ 2, 3 ]
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build
+        run: |
+          mkdir -p out
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DBALLAST_MIB=${{ matrix.ballast }} -DRUN_SECONDS=240 -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 --emrun -o out/repro.html
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" $EMSDK_IMAGE cp /emsdk/upstream/emscripten/emrun.py /out/
+
+      - name: Run
+        timeout-minutes: 20
+        working-directory: out
+        run: |
+          mkdir -p /tmp/ffprof
+          echo 'user_pref("dom.maxHardwareConcurrency", ${{ matrix.pool }});' > /tmp/ffprof/user.js
+          taskset -c 0,1 python3 emrun.py --browser=/usr/bin/firefox --browser-args="--headless --profile /tmp/ffprof" --kill-start --kill-exit ./repro.html
