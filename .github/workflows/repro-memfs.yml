@@ -16,8 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        raw: [ 0, 1 ]
-        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 ]
+        io_mode: [ 0, 1, 2 ]
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 ]
 
     steps:
       - uses: actions/checkout@v5
@@ -25,7 +25,7 @@ jobs:
       - name: Build
         run: |
           mkdir -p out
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DBALLAST_MIB=100 -DRAW_IO=${{ matrix.raw }} -DRUN_SECONDS=240 -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 --emrun -o out/repro.html
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/src" -w /src $EMSDK_IMAGE em++ -std=c++20 -O2 -pthread memfs_repro.cpp -DBALLAST_MIB=100 -DIO_MODE=${{ matrix.io_mode }} -DRUN_SECONDS=240 -s PTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 -s EXIT_RUNTIME=1 --emrun -o out/repro.html
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/out:/out" $EMSDK_IMAGE cp /emsdk/upstream/emscripten/emrun.py /out/
 
       - name: Run

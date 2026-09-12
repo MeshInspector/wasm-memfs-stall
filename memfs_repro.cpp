@@ -29,14 +29,16 @@ namespace
 #ifndef SECOND_THREAD_FS
 #define SECOND_THREAD_FS 1
 #endif
-// 1 = write() straight to a fd, no stdio and no FILE lock; 0 = std::ofstream as before
-#ifndef RAW_IO
-#define RAW_IO 0
+// 0 = both threads use stdio; 1 = the writer uses raw fds; 2 = both do, so no FILE
+// lock is taken anywhere. emscripten#20059 blames the stdio FLOCK, so mode 2 is the test.
+#ifndef IO_MODE
+#define IO_MODE 0
 #endif
 
-#if RAW_IO
+#if IO_MODE >= 1
 #include <fcntl.h>
 #include <unistd.h>
+#include <vector>
 #endif
 
 constexpr int cSeconds = RUN_SECONDS;
@@ -133,7 +135,7 @@ int main()
                 std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
             return;
         }
-#if RAW_IO
+#if IO_MODE >= 1
         const int fd = ::open( ( dir / "log.txt" ).c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644 );
         if ( fd < 0 )
             return;
@@ -154,14 +156,32 @@ int main()
 
     std::thread( [src, dir]
     {
-        std::error_code workerEc;
         const auto dst = dir / "dst.bin";
+#if IO_MODE >= 2
+        std::vector<char> buf( 64 * 1024 );
+        while ( !gStop.load( std::memory_order_acquire ) )
+        {
+            ::unlink( dst.c_str() );
+            const int in = ::open( src.c_str(), O_RDONLY );
+            const int out = ::open( dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644 );
+            if ( in >= 0 && out >= 0 )
+                for ( ssize_t got = 0; ( got = ::read( in, buf.data(), buf.size() ) ) > 0; )
+                    ::write( out, buf.data(), size_t( got ) );
+            if ( in >= 0 )
+                ::close( in );
+            if ( out >= 0 )
+                ::close( out );
+            gCopies.fetch_add( 1, std::memory_order_relaxed );
+        }
+#else
+        std::error_code workerEc;
         while ( !gStop.load( std::memory_order_acquire ) )
         {
             std::filesystem::remove( dst, workerEc );
             std::filesystem::copy( src, dst, workerEc );
             gCopies.fetch_add( 1, std::memory_order_relaxed );
         }
+#endif
     } ).detach();
 
     gStart = gLastProgress = std::chrono::steady_clock::now();
