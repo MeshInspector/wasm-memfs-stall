@@ -45,8 +45,8 @@ jobs:
           echo 'user_pref("dom.maxHardwareConcurrency", 2);' > /tmp/ffprof/user.js
           taskset -c 0,1 python3 emrun.py --browser=/usr/bin/firefox --browser-args="--headless --profile /tmp/ffprof" --kill-start ./repro.html > run.log 2>&1 &
           EMRUN=$!
-          sleep 20
-          grep -q hardware_concurrency run.log || { echo "the program never started - config is broken"; cat run.log; exit 1; }
+          for i in $(seq 1 18); do sleep 10; grep -q hardware_concurrency run.log && break; done
+          grep -q hardware_concurrency run.log || { echo "the program never started in 3 min - config is broken"; cat run.log; exit 1; }
           for i in $(seq 1 60); do sleep 10; grep -qE "STALLED|done:" run.log && break; done
           if grep -q STALLED run.log; then echo "stall seen, asking Firefox to shut down so the profiler dumps"; pkill -TERM -f firefox || true; sleep 25; fi
           kill $EMRUN 2>/dev/null || true
