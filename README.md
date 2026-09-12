@@ -44,9 +44,9 @@ The pthread pool size is set at run time through the Firefox pref `dom.maxHardwa
 
 | variant | stalled |
 |---|---|
-| stdio writer + `std::filesystem::copy` | 3/28 |
-| raw `write()` writer + `std::filesystem::copy` | 1/16 |
-| raw everywhere: `open`/`read`/`write`/`unlink` | 2/16 |
+| stdio writer + `std::filesystem::copy` | 3/44 |
+| raw `write()` writer + `std::filesystem::copy` | 1/32 |
+| raw everywhere: `open`/`read`/`write`/`unlink` | 3/32 |
 | ballast 0 / 25 / 100 / 600 MB | no difference detectable |
 | pthread pool 2 vs 3 | no difference detectable |
 
