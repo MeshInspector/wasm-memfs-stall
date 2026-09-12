@@ -49,8 +49,9 @@ const char* phaseName( int p )
     case 3: return "open-dst";
     case 4: return "read";
     case 5: return "write";
-    case 6: return "close";
+    case 6: return "close-src";
     case 7: return "between calls";
+    case 8: return "close-dst";
     default: return "?";
     }
 }
@@ -174,6 +175,7 @@ int main()
             gCopyPhase.store( 6, std::memory_order_relaxed );
             if ( in >= 0 )
                 ::close( in );
+            gCopyPhase.store( 8, std::memory_order_relaxed );
             if ( out >= 0 )
                 ::close( out );
             gCopyPhase.store( 7, std::memory_order_relaxed );
