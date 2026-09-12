@@ -8,8 +8,10 @@ left is ~110 lines with two threads and no dependencies.
 
 ## What it does
 
-* one thread loops `std::filesystem::remove` + `std::filesystem::copy` on a 100 KB file
-* one thread appends a line to a log file and flushes, in a loop
+* one thread copies a 100 KB file in a loop with `unlink`/`open`/`read`/`write`/`close`
+* one thread appends a line to another file in a loop with `write`
+* each thread records the call it is about to enter, so a stall names the one that never
+  returned: `copier in read, writer in write`
 * `main()` installs `emscripten_set_main_loop`, so the main thread is genuinely back in the
   browser event loop between frames; the frame callback watches a counter and exits 3 if no
   copy finishes for 60 s
@@ -37,8 +39,9 @@ wedged -- so grep for the marker, not the exit code.
 
 ## Knobs
 
-All compile-time defines: `BALLAST_MIB`, `TOUCH_BALLAST`, `RUN_SECONDS`, `SECOND_THREAD_FS`.
-The pthread pool size is set at run time through the Firefox pref `dom.maxHardwareConcurrency`.
+`RUN_SECONDS` only. Everything else that was once a knob -- heap ballast, stdio versus raw
+syscalls, the pthread pool size, whether the second thread touches the filesystem -- turned
+out not to change the outcome and has been removed.
 
 ## Measured so far
 
