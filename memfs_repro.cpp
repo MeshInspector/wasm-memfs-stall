@@ -36,6 +36,8 @@ std::chrono::steady_clock::time_point gStart;
 std::chrono::steady_clock::time_point gLastProgress;
 long long gSeen = 0;
 int gExitCountdown = -1;
+bool gStalled = false;
+long long gStalledFrames = 0;
 
 const char* phaseName( int p )
 {
@@ -75,7 +77,20 @@ void frame()
             phaseName( gWritePhase.load( std::memory_order_relaxed ) ) );
         std::putchar( 10 );
         std::fflush( stdout );
-        emscripten_force_exit( 3 );
+        // deliberately do NOT exit: the harness now SIGTERMs Firefox so the Gecko profiler
+        // dumps every thread's stack while the wedge is still there
+        gStalled = true;
+    }
+
+    if ( gStalled )
+    {
+        if ( ++gStalledFrames % 600 == 0 )
+        {
+            std::printf( "still stalled, main loop alive" );
+            std::putchar( 10 );
+            std::fflush( stdout );
+        }
+        return;
     }
 
     if ( gExitCountdown > 0 )
