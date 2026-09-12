@@ -48,6 +48,26 @@ constexpr int cFileKiB = 100;
 constexpr size_t cBallastMiB = BALLAST_MIB;
 
 std::atomic<long long> gCopies{ 0 };
+// a wedged thread cannot report its own stack and nothing can walk it, so each thread
+// leaves the syscall it is about to enter here; the watchdog prints both on a stall
+std::atomic<int> gCopyPhase{ 0 };
+std::atomic<int> gWritePhase{ 0 };
+
+const char* phaseName( int p )
+{
+    switch ( p )
+    {
+    case 0: return "start";
+    case 1: return "unlink";
+    case 2: return "open-src";
+    case 3: return "open-dst";
+    case 4: return "read";
+    case 5: return "write";
+    case 6: return "close";
+    case 7: return "loop-top";
+    default: return "?";
+    }
+}
 std::atomic<bool> gStop{ false };
 int gExitCountdown = -1;
 std::chrono::steady_clock::time_point gStart;
@@ -70,7 +90,10 @@ void frame()
     }
     else if ( secondsSince( gLastProgress ) >= cStallSeconds )
     {
-        std::printf( "STALLED: no copy finished for %d s after %lld copies", cStallSeconds, gSeen );
+        std::printf( "STALLED: no copy finished for %d s after %lld copies; copier in %s, writer in %s",
+            cStallSeconds, gSeen,
+            phaseName( gCopyPhase.load( std::memory_order_relaxed ) ),
+            phaseName( gWritePhase.load( std::memory_order_relaxed ) ) );
         std::putchar( 10 );
         std::fflush( stdout );
         emscripten_force_exit( 3 );
@@ -141,7 +164,11 @@ int main()
             return;
         const std::string line = std::string( "[info] a line of about the length the application writes" ) + char( 10 );
         while ( !gStop.load( std::memory_order_acquire ) )
+        {
+            gWritePhase.store( 5, std::memory_order_relaxed );
             ::write( fd, line.data(), line.size() );
+            gWritePhase.store( 7, std::memory_order_relaxed );
+        }
         ::close( fd );
 #else
         std::ofstream log( dir / "log.txt", std::ios::binary | std::ios::app );
@@ -161,16 +188,30 @@ int main()
         std::vector<char> buf( 64 * 1024 );
         while ( !gStop.load( std::memory_order_acquire ) )
         {
+            gCopyPhase.store( 1, std::memory_order_relaxed );
             ::unlink( dst.c_str() );
+            gCopyPhase.store( 2, std::memory_order_relaxed );
             const int in = ::open( src.c_str(), O_RDONLY );
+            gCopyPhase.store( 3, std::memory_order_relaxed );
             const int out = ::open( dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644 );
             if ( in >= 0 && out >= 0 )
-                for ( ssize_t got = 0; ( got = ::read( in, buf.data(), buf.size() ) ) > 0; )
+            {
+                for ( ssize_t got = 0; ; )
+                {
+                    gCopyPhase.store( 4, std::memory_order_relaxed );
+                    got = ::read( in, buf.data(), buf.size() );
+                    if ( got <= 0 )
+                        break;
+                    gCopyPhase.store( 5, std::memory_order_relaxed );
                     ::write( out, buf.data(), size_t( got ) );
+                }
+            }
+            gCopyPhase.store( 6, std::memory_order_relaxed );
             if ( in >= 0 )
                 ::close( in );
             if ( out >= 0 )
                 ::close( out );
+            gCopyPhase.store( 7, std::memory_order_relaxed );
             gCopies.fetch_add( 1, std::memory_order_relaxed );
         }
 #else
