@@ -64,6 +64,17 @@ int secondsSince( std::chrono::steady_clock::time_point t )
 
 void frame()
 {
+    if ( gStalled )
+    {
+        if ( ++gStalledFrames % 600 == 0 )
+        {
+            std::printf( "still stalled, main loop alive" );
+            std::putchar( 10 );
+            std::fflush( stdout );
+        }
+        return;
+    }
+
     const long long now = gCopies.load( std::memory_order_relaxed );
     if ( now != gSeen )
     {
@@ -81,17 +92,6 @@ void frame()
         // deliberately do NOT exit: the harness now SIGTERMs Firefox so the Gecko profiler
         // dumps every thread's stack while the wedge is still there
         gStalled = true;
-    }
-
-    if ( gStalled )
-    {
-        if ( ++gStalledFrames % 600 == 0 )
-        {
-            std::printf( "still stalled, main loop alive" );
-            std::putchar( 10 );
-            std::fflush( stdout );
-        }
-        return;
     }
 
     if ( gExitCountdown > 0 )
