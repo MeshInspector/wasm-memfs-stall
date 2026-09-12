@@ -37,7 +37,7 @@ jobs:
         env:
           MOZ_PROFILER_STARTUP: 1
           MOZ_PROFILER_STARTUP_INTERVAL: 10
-          MOZ_PROFILER_STARTUP_FEATURES: js,stackwalk,cpu,samplingallthreads
+          MOZ_PROFILER_STARTUP_FEATURES: js,stackwalk
           MOZ_PROFILER_STARTUP_FILTERS: GeckoMain,DOM Worker
           MOZ_PROFILER_SHUTDOWN: profile.json
         run: |
