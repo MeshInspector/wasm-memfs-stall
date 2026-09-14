@@ -2,8 +2,8 @@
 
 **Nothing to file. The bug is emscripten's, it was fixed on 2026-04-01 in
 [#26582](https://github.com/emscripten-core/emscripten/pull/26582), and the fix shipped in emsdk
-5.0.5 on 2026-04-03. MeshInspectorCode pins `emscripten/emsdk:4.0.19` in
-`docker/emscriptenDockerfile:24`, which predates it. Bumping that should end the flake.**
+5.0.5 on 2026-04-03. Our wasm build pins `emscripten/emsdk:4.0.19`, which predates it.
+Bumping that should end the flake.**
 
 ## The bug
 
@@ -85,7 +85,7 @@ Zero stalls in 144 shards on 5.0.5 and later, against ~15% per shard below it.
 
 1. Bump `docker/emscriptenDockerfile:24` from `emscripten/emsdk:4.0.19` to 6.0.9, or at minimum
    5.0.5. Worth checking the toolchain image and `CLANG_GCC_PIN` move with it.
-2. Close MIC#7724 against this, noting the real rate was ~1 in 1200 imports, not 1 in 350.
+2. Close the tracking issue against this, noting the real rate was ~1 in 1200 imports, not 1 in 350.
 3. The reproducer stays at https://github.com/MeshInspector/wasm-memfs-stall — it is the regression
    test if this ever comes back.
 
