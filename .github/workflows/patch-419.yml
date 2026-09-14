@@ -45,7 +45,9 @@ jobs:
             -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o /tmp/repro.js
           cd /tmp && timeout 780 node repro.js || true
           SH
-          docker run --rm -e ARM=${{ matrix.arm }} -v "$PWD:/src" -w /src "$IMAGE" \
+          # two cores, as every earlier measurement of this hang used: the race needs the
+          # contention. Unpinned on a 4-core runner the stock rate drops from ~15% to ~2%.
+          docker run --rm --cpuset-cpus="0,1" -e ARM=${{ matrix.arm }} -v "$PWD:/src" -w /src "$IMAGE" \
             bash -c "$(cat job.sh)" > run.log 2>&1 || true
           cat run.log
           if grep -q "^STALLED" run.log; then R=STALL; elif grep -q "^done:" run.log; then R=clean; else R=UNKNOWN; fi
