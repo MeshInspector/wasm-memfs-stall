@@ -1,0 +1,64 @@
+name: Does patching 4.0.19 stop the hang
+
+# A/B for MeshInspector/MeshLib#6859: the same emsdk 4.0.19, once stock and once with
+# emscripten-core/emscripten#26582 applied by the very script that PR ships. Same shard
+# count on both arms, same runner, same run - so the comparison is not across days.
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  IMAGE: emscripten/emsdk:4.0.19-arm64
+  PATCH_URL: https://raw.githubusercontent.com/MeshInspector/MeshLib/patch-emsdk-proxying/scripts/devops/patch_emsdk_proxying.py
+
+jobs:
+  ab:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [ stock, patched ]
+        shard: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 ]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch the patch script from the PR
+        run: curl -fsSL "$PATCH_URL" -o patch_emsdk_proxying.py && head -3 patch_emsdk_proxying.py
+
+      # Patch, build and run in ONE container: each docker run starts from the stock image, so
+      # the patch has to reach the compile in the same invocation. Deleting the prebuilt
+      # libc-mt archives is what makes it take effect - proxying.c is compiled into libc.
+      - name: Build and run
+        timeout-minutes: 22
+        run: |
+          cat > job.sh <<'SH'
+          set -e
+          if [ "$ARM" = patched ]; then
+            python3 /src/patch_emsdk_proxying.py
+            find /emsdk/upstream/emscripten/cache/sysroot -name 'libc-mt*.a' -print -delete
+          fi
+          grep -n -A3 'sync.state = DONE' /emsdk/upstream/emscripten/system/lib/pthread/proxying.c | head -6
+          em++ -std=c++20 -O2 -pthread /src/memfs_repro.cpp -DRUN_SECONDS=480 \
+            -s PTHREAD_POOL_SIZE=2 -s PTHREAD_POOL_SIZE_STRICT=0 -s ALLOW_MEMORY_GROWTH=1 \
+            -s EXIT_RUNTIME=1 -s ENVIRONMENT=node,worker -o /tmp/repro.js
+          cd /tmp && timeout 780 node repro.js || true
+          SH
+          docker run --rm -e ARM=${{ matrix.arm }} -v "$PWD:/src" -w /src "$IMAGE" \
+            bash -c "$(cat job.sh)" > run.log 2>&1 || true
+          cat run.log
+          if grep -q "^STALLED" run.log; then R=STALL; elif grep -q "^done:" run.log; then R=clean; else R=UNKNOWN; fi
+          echo "RESULT arm=${{ matrix.arm }} shard=${{ matrix.shard }} $R"
+
+      - name: Mark a stall
+        if: ${{ always() }}
+        run: grep -q "^STALLED" run.log && touch stalled-${{ matrix.arm }}-${{ matrix.shard }} || true
+
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: stalled-${{ matrix.arm }}-${{ matrix.shard }}
+          path: stalled-${{ matrix.arm }}-${{ matrix.shard }}
+          if-no-files-found: ignore
+          retention-days: 3

@@ -2,8 +2,8 @@ name: MEMFS stall repro
 
 # Standalone: no MeshLib build, no MRTest, no Playwright. The matrix below is the
 # experiment -- edit it, push, and every cell runs in parallel in about ten minutes.
+# its question is answered; keep it runnable by hand, but off every push
 on:
-  push:
   workflow_dispatch:
 
 env:
