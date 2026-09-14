@@ -3,13 +3,13 @@ name: Does patching 4.0.19 stop the hang
 # A/B for MeshInspector/MeshLib#6859: the same emsdk 4.0.19, once stock and once with
 # emscripten-core/emscripten#26582 applied by the very script that PR ships. Same shard
 # count on both arms, same runner, same run - so the comparison is not across days.
+# the question is answered - stock 17 of 48, patched 0 of 48 - so keep it on demand only
 on:
-  push:
   workflow_dispatch:
 
 env:
   IMAGE: emscripten/emsdk:4.0.19-arm64
-  PATCH_URL: https://raw.githubusercontent.com/MeshInspector/MeshLib/patch-emsdk-proxying/scripts/devops/patch_emsdk_proxying.py
+  PATCH_URL: https://raw.githubusercontent.com/MeshInspector/MeshLib/patch-emsdk-proxying/docker/patches/emsdk-4.0.19-proxying-26582.patch
 
 jobs:
   ab:
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Fetch the patch script from the PR
-        run: curl -fsSL "$PATCH_URL" -o patch_emsdk_proxying.py && head -3 patch_emsdk_proxying.py
+        run: curl -fsSL "$PATCH_URL" -o proxying.patch && cat proxying.patch
 
       # Patch, build and run in ONE container: each docker run starts from the stock image, so
       # the patch has to reach the compile in the same invocation. Deleting the prebuilt
@@ -36,7 +36,7 @@ jobs:
           cat > job.sh <<'SH'
           set -e
           if [ "$ARM" = patched ]; then
-            python3 /src/patch_emsdk_proxying.py
+            patch -p1 --batch --forward -d /emsdk/upstream/emscripten < /src/proxying.patch
             find /emsdk/upstream/emscripten/cache/sysroot -name 'libc-mt*.a' -print -delete
           fi
           grep -n -A3 'sync.state = DONE' /emsdk/upstream/emscripten/system/lib/pthread/proxying.c | head -6
